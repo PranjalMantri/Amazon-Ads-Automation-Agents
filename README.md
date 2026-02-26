@@ -1,13 +1,28 @@
 # Amazon Ads Automation (AI Agent Workflow)
 
-This project uses an agentic workflow (via LangChain/LangGraph) to analyze Amazon Ads data, generate insights, and produce structured metrics reports.
+This project leverages a multi-agent AI system based on LangChain and LangGraph to analyze Amazon Ads data. It automates the process of loading metrics, identifying trends, and generating strategic performance reports.
 
-## Overview
+## Features
 
-The system consists of several specialized agents:
-- **Insights Agent**: Interprets tricky trends and qualitative data.
-- **Metrics Agent**: Aggregates and calculates quantitative performance metrics.
-- **Supervisor**: Coordinates the workflow and consolidates the final report.
+- **Multi-Agent Architecture**:
+  - **Metrics Agent**: Computes granular performance metrics (CPC, ACOS, ROAS) from raw data.
+  - **Insights Agent**: interpretation of metrics to provide qualitative strategic advice.
+  - **Supervisor**: Orchestrates the workflow and delegates tasks between agents.
+- **Workflow Automation**: Built on LangGraph to handle state and routing between analysis steps.
+- **Structured Output**: Produces JSON-based metric bundles and structured insight reports.
+
+## Structure
+
+```
+src/
+├── agents/        # Agent definitions (Metrics, Insights, Supervisor)
+├── config/        # Configuration and LLM setup
+├── framework/     # Base classes for agents and registry
+├── graph/         # LangGraph workflow construction
+├── schemas/       # Pydantic models for data validation
+├── tools/         # Data loading and calculation tools
+└── utils/         # Helper functions
+```
 
 ## Setup
 
@@ -31,35 +46,27 @@ The system consists of several specialized agents:
    pip install -r requirements.txt
    ```
 
-4. **Configure Environment Variables:**
-   Copy `.env.example` to `.env` and fill in your API keys.
+4. **Environment Configuration:**
+   Create a `.env` file in the root directory:
    ```bash
-   cp .env.example .env
+   GOOGLE_API_KEY=your_gemini_api_key_here
    ```
-   Required keys:
-   - `ANTHROPIC_API_KEY` (for Claude models)
 
 ## Usage
 
-Run the main script to start the analysis workflow:
+Run the main analysis script:
 
 ```bash
-python main.py --request "Generate an Amazon Ads performance report regarding Q3 ad spend efficiency."
+python main.py --request "Analyze Q3 ad performance and suggest budget reallocations."
 ```
 
-**Optional Arguments:**
-- `--start-date YYYY-MM-DD`: Filter data from this date.
-- `--end-date YYYY-MM-DD`: Filter data up to this date.
+### Options
 
-## Output
+- `--request`: Description of the analysis task (default: "Generate an Amazon Ads performance report.").
+- `--start-date`: Filter data starting from this date (YYYY-MM-DD).
+- `--end-date`: Filter data up to this date (YYYY-MM-DD).
 
-- The script prints a structured JSON payload to the console.
-- A file `metrics_output.json` is generated with the account summary.
+## Outputs
 
-## Project Structure
-
-- `src/agents/`: Agent definitions (Insights, Metrics, Supervisor).
-- `src/config/`: Configuration (LLM settings, etc.).
-- `src/graph/`: LangGraph workflow definition.
-- `src/tools/`: Tools for data loading and metric calculation.
-- `data/`: Place your input Excel files here (e.g., `SD_AdvertisedProduct.xlsx`).
+- `metrics_output.json`: Detailed quantitative metrics.
+- Console Output: High-level insights and executive summary.

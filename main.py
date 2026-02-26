@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from typing import Any
 
 from src.graph import build_workflow
 from src.agents.supervisor import initialize_state, SupervisorState
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,7 +75,7 @@ def pretty_print_results(final_state: SupervisorState) -> None:
 def main() -> None:
     args = parse_args()
 
-    print("[Main] Building LangGraph workflow...")
+    logger.info("Building LangGraph workflow...")
     app = build_workflow()
 
     initial_state: SupervisorState = initialize_state(
@@ -80,13 +84,10 @@ def main() -> None:
         end_date=args.end_date,
     )
 
-    print(
-        "[Main] Invoking workflow with request:"
-        f" {args.request!r}, start_date={args.start_date}, end_date={args.end_date}"
-    )
+    logger.info(f"Invoking workflow with request: {args.request!r}")
 
     final_state: SupervisorState = app.invoke(initial_state)
-    print("[Main] Workflow completed. Rendering results.")
+    logger.info("Workflow completed. Rendering results.")
     pretty_print_results(final_state)
 
 

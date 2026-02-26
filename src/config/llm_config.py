@@ -3,19 +3,21 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from langchain_anthropic import ChatAnthropic
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
 
+load_dotenv()
 
-CLAUDE_HAIKU_MODEL = "claude-3-haiku-20240307"
+GEMINI_MODEL = "gemini-3-flash-preview"
 
-
-def _get_anthropic_api_key() -> str:
+def _get_google_api_key() -> str:
     """Retrieve API key from environment."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
+
     if not api_key:
         raise RuntimeError(
-            "ANTHROPIC_API_KEY environment variable is not set. "
-            "Set it before running the Amazon Ads agents."
+            "GEMINI_API_KEY or GOOGLE_API_KEY environment variable is not set. "
+            "Set it in .env before running."
         )
     return api_key
 
@@ -24,27 +26,24 @@ def _base_llm(
     *,
     temperature: float = 0.0,
     max_tokens: int = 2048,
-    model: str = CLAUDE_HAIKU_MODEL,
+    model: str = GEMINI_MODEL,
     timeout: Optional[float] = None,
-) -> ChatAnthropic:
-    """Create a configured ChatAnthropic instance."""
-    return ChatAnthropic(
+) -> ChatGoogleGenerativeAI:
+    """Create a configured ChatGoogleGenerativeAI instance."""
+    return ChatGoogleGenerativeAI(
         model=model,
         temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
-        api_key=_get_anthropic_api_key(),
+        max_output_tokens=max_tokens,
+        api_key=_get_google_api_key(),
     )
 
 
-def get_metrics_llm() -> ChatAnthropic:
-    """Metrics agent uses deterministic outputs (temp=0)."""
+def get_metrics_llm() -> ChatGoogleGenerativeAI:
     return _base_llm(temperature=0.0, max_tokens=1024)
 
 
-def get_insights_llm() -> ChatAnthropic:
-    """Insights agent uses creative outputs (temp=0.2)."""
-    return _base_llm(temperature=0.2, max_tokens=2048)
+def get_insights_llm() -> ChatGoogleGenerativeAI:
+    return _base_llm(temperature=0.4, max_tokens=2048)
 
 
 __all__ = [

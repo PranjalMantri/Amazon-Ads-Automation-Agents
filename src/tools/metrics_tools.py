@@ -11,6 +11,7 @@ from src.schemas.metrics_schema import (
     ProductMetrics,
     SearchTermMetrics,
 )
+from src.tools.data_loader_tools import _load_dataframe
 
 
 def _to_dataframe(records: Optional[Iterable[Dict[str, Any]]]) -> pd.DataFrame:
@@ -50,7 +51,6 @@ def _extract_numeric_columns(df: pd.DataFrame) -> Tuple[str, str, str, str, str]
     Raises ValueError if any required column cannot be located.
     """
     spend_col = _first_existing_column(df, ["Spend", "spend"])
-    # Amazon Ads export variants for sales and orders (including 14-day windows).
     sales_col = _first_existing_column(
         df,
         [
@@ -87,9 +87,9 @@ def _extract_numeric_columns(df: pd.DataFrame) -> Tuple[str, str, str, str, str]
         if col is None
     ]
     if missing:
+        # In robust systems, we might warn instead of crashing, but failure ensures we don't return garbage.
         raise ValueError(
-            f"Required numeric columns not found in data: {', '.join(missing)}. "
-            "Please ensure the Excel exports include these fields."
+            f"Required numeric columns not found: {', '.join(missing)}."
         )
 
     return spend_col, sales_col, orders_col, impressions_col, clicks_col
@@ -139,28 +139,31 @@ def _aggregate_base_metrics(group_df: pd.DataFrame) -> Dict[str, Any]:
 
 @tool("compute_campaign_metrics", return_direct=False)
 def compute_campaign_metrics(
-    sd_data: Optional[List[Dict[str, Any]]] = None,
-    sb_data: Optional[List[Dict[str, Any]]] = None,
+    dataset_names: List[str],
 ) -> List[Dict[str, Any]]:
     """
     Deterministically compute campaign-level performance metrics.
 
     Args:
-        sd_data: Raw Sponsored Display rows (from `load_sd_product_data`).
-        sb_data: Raw Sponsored Brands rows (from `load_sb_search_term_data`).
-
-    Returns:
-        List of `CampaignMetrics` serialized as dictionaries.
+        dataset_names: List of dataset names to include (e.g. ['sponsored_display', 'sponsored_brands'])
     """
     frames: List[pd.DataFrame] = []
-    if sd_data:
-        df_sd = _normalize_columns(_to_dataframe(sd_data))
-        df_sd["__campaign_type"] = "SD"
-        frames.append(df_sd)
-    if sb_data:
-        df_sb = _normalize_columns(_to_dataframe(sb_data))
-        df_sb["__campaign_type"] = "SB"
-        frames.append(df_sb)
+    
+    for name in dataset_names:
+        try:
+            df = _load_dataframe(name)
+            df = _normalize_columns(df)
+            # Tag the source type if possible
+            if "sponsored_display" in name:
+                df["__campaign_type"] = "SD"
+            elif "sponsored_brands" in name:
+                df["__campaign_type"] = "SB"
+            else:
+                df["__campaign_type"] = "Other"
+            frames.append(df)
+        except Exception:
+            # Skip invalid datasets or handle error
+            continue
 
     if not frames:
         return []
@@ -171,13 +174,20 @@ def compute_campaign_metrics(
         df, ["Campaign Name", "campaign_name", "Campaign"]
     )
     campaign_id_col = _first_existing_column(df, ["Campaign ID", "campaign_id"])
+    
+    # If we can't identify campaigns, we can't group by them.
+    if not campaign_name_col and not campaign_id_col:
+        return []
 
     group_keys = []
     if campaign_id_col:
         group_keys.append(campaign_id_col)
     if campaign_name_col:
         group_keys.append(campaign_name_col)
-    group_keys.append("__campaign_type")
+    # group_keys.append("__campaign_type") # Optional: split by type or aggregate same campaign across types? 
+    # Usually same campaign ID implies same campaign. Let's keep type for clarity if unique.
+    if "__campaign_type" in df.columns:
+        group_keys.append("__campaign_type")
 
     grouped = df.groupby(group_keys, dropna=False)
 
@@ -186,7 +196,11 @@ def compute_campaign_metrics(
         if not isinstance(key_vals, tuple):
             key_vals = (key_vals,)
         key_map = dict(zip(group_keys, key_vals))
-        base = _aggregate_base_metrics(group_df)
+        
+        try:
+            base = _aggregate_base_metrics(group_df)
+        except ValueError:
+            continue
 
         metrics = CampaignMetrics(
             campaign_id=str(key_map.get(campaign_id_col)) if campaign_id_col else None,
@@ -203,31 +217,24 @@ def compute_campaign_metrics(
 
 @tool("compute_search_term_metrics", return_direct=False)
 def compute_search_term_metrics(
-    sb_data: Optional[List[Dict[str, Any]]] = None,
+    dataset_name: str = "sponsored_brands",
 ) -> List[Dict[str, Any]]:
     """
-    Deterministically compute search-term-level performance metrics from
-    Sponsored Brands data.
-
-    Args:
-        sb_data: Raw Sponsored Brands rows (from `load_sb_search_term_data`).
-
-    Returns:
-        List of `SearchTermMetrics` serialized as dictionaries.
+    Deterministically compute search-term-level performance metrics.
+    Defaults to 'sponsored_brands' if not specified.
     """
-    if not sb_data:
+    try:
+        df = _load_dataframe(dataset_name)
+    except Exception:
         return []
 
-    df = _normalize_columns(_to_dataframe(sb_data))
+    df = _normalize_columns(df)
 
     search_term_col = _first_existing_column(
         df, ["Search Term", "search_term", "Customer Search Term"]
     )
     if not search_term_col:
-        raise ValueError(
-            "Search term column not found in Sponsored Brands data. "
-            "Expected e.g. 'Search Term' or 'Customer Search Term'."
-        )
+        return []
 
     campaign_name_col = _first_existing_column(
         df, ["Campaign Name", "campaign_name", "Campaign"]
@@ -253,7 +260,11 @@ def compute_search_term_metrics(
         if not isinstance(key_vals, tuple):
             key_vals = (key_vals,)
         key_map = dict(zip(group_keys, key_vals))
-        base = _aggregate_base_metrics(group_df)
+        
+        try:
+            base = _aggregate_base_metrics(group_df)
+        except ValueError:
+            continue
 
         metrics = SearchTermMetrics(
             search_term=str(key_map.get(search_term_col)),
@@ -276,22 +287,18 @@ def compute_search_term_metrics(
 
 @tool("compute_product_metrics", return_direct=False)
 def compute_product_metrics(
-    sd_data: Optional[List[Dict[str, Any]]] = None,
+    dataset_name: str = "sponsored_display",
 ) -> List[Dict[str, Any]]:
     """
-    Deterministically compute product-level performance metrics from Sponsored
-    Display advertised product data.
-
-    Args:
-        sd_data: Raw Sponsored Display rows (from `load_sd_product_data`).
-
-    Returns:
-        List of `ProductMetrics` serialized as dictionaries.
+    Deterministically compute product-level performance metrics.
+    Defaults to 'sponsored_display'.
     """
-    if not sd_data:
+    try:
+        df = _load_dataframe(dataset_name)
+    except Exception:
         return []
 
-    df = _normalize_columns(_to_dataframe(sd_data))
+    df = _normalize_columns(df)
 
     asin_col = _first_existing_column(df, ["ASIN", "asin"])
     sku_col = _first_existing_column(df, ["SKU", "sku"])
@@ -312,20 +319,22 @@ def compute_product_metrics(
 
     if not group_keys:
         # Fallback: aggregate across entire dataset as a single pseudo-product.
-        group_keys = []
-
-    if group_keys:
-        grouped = df.groupby(group_keys, dropna=False)
-    else:
+        # But allow for "all" 
         df["__all"] = 1
         grouped = df.groupby("__all", dropna=False)
+    else:
+        grouped = df.groupby(group_keys, dropna=False)
 
     results: List[Dict[str, Any]] = []
     for key_vals, group_df in grouped:
         if not isinstance(key_vals, tuple):
             key_vals = (key_vals,)
         key_map = dict(zip(group_keys or ["__all"], key_vals))
-        base = _aggregate_base_metrics(group_df)
+        
+        try:
+            base = _aggregate_base_metrics(group_df)
+        except ValueError:
+            continue
 
         metrics = ProductMetrics(
             asin=str(key_map.get(asin_col)) if asin_col else None,
@@ -345,7 +354,8 @@ def compute_product_metrics(
 
     return results
 
-
+# NOTE: Account summary still expects the calculated metrics to aggregate them.
+# The agent will likely compute C/S/P metrics and then pass them to this tool.
 @tool("compute_account_summary", return_direct=False)
 def compute_account_summary(
     campaign_metrics: Optional[List[Dict[str, Any]]] = None,
@@ -356,26 +366,25 @@ def compute_account_summary(
     Deterministically compute an account-level summary.
 
     This function aggregates core performance metrics from campaign-level
-    results and counts total entities from all three granularities.
-
-    Args:
-        campaign_metrics: List of `CampaignMetrics` as dictionaries.
-        search_term_metrics: List of `SearchTermMetrics` as dictionaries.
-        product_metrics: List of `ProductMetrics` as dictionaries.
-
-    Returns:
-        An `AccountSummary` serialized as a dictionary.
+    results (or other levels if campaign is missing) and counts entities.
     """
     campaign_metrics = campaign_metrics or []
     search_term_metrics = search_term_metrics or []
     product_metrics = product_metrics or []
 
     # Aggregate core performance from campaigns only to avoid double counting.
-    spend = sum(float(m.get("spend", 0.0)) for m in campaign_metrics)
-    sales = sum(float(m.get("sales", 0.0)) for m in campaign_metrics)
-    orders = int(sum(float(m.get("orders", 0)) for m in campaign_metrics))
-    impressions = int(sum(float(m.get("impressions", 0)) for m in campaign_metrics))
-    clicks = int(sum(float(m.get("clicks", 0)) for m in campaign_metrics))
+    # If no campaign metrics, try products, then search terms.
+    source_metrics = campaign_metrics
+    if not source_metrics and product_metrics:
+        source_metrics = product_metrics
+    if not source_metrics and search_term_metrics:
+        source_metrics = search_term_metrics
+
+    spend = sum(float(m.get("spend", 0.0)) for m in source_metrics)
+    sales = sum(float(m.get("sales", 0.0)) for m in source_metrics)
+    orders = int(sum(float(m.get("orders", 0)) for m in source_metrics))
+    impressions = int(sum(float(m.get("impressions", 0)) for m in source_metrics))
+    clicks = int(sum(float(m.get("clicks", 0)) for m in source_metrics))
 
     ctr = _safe_div(clicks, impressions)
     cvr = _safe_div(orders, clicks)
@@ -383,6 +392,10 @@ def compute_account_summary(
     acos = _safe_div(spend, sales)
     roas = _safe_div(sales, spend)
 
+    total_campaigns = len({m.get('campaign_id') for m in campaign_metrics if m.get('campaign_id')})
+    # If campaign_metrics list is empty, count might be 0, but total_campaigns might also be derived from products/search terms
+    # but strictly speaking we count what we have.
+    
     summary = AccountSummary(
         spend=spend,
         sales=sales,
@@ -394,7 +407,7 @@ def compute_account_summary(
         cpc=cpc,
         acos=acos,
         roas=roas,
-        total_campaigns=len(campaign_metrics),
+        total_campaigns=total_campaigns if total_campaigns > 0 else len(campaign_metrics),
         total_products=len(product_metrics),
         total_search_terms=len(search_term_metrics),
         start_date=None,
@@ -402,4 +415,3 @@ def compute_account_summary(
     )
 
     return summary.dict()
-
