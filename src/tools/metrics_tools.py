@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from datetime import datetime
 
 import pandas as pd
 from langchain.tools import tool
@@ -137,15 +138,14 @@ def _aggregate_base_metrics(group_df: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
-@tool("compute_campaign_metrics", return_direct=False)
-def compute_campaign_metrics(
+def _compute_campaign_metrics(
     dataset_names: List[str],
+    sort_by: str = "spend",
+    ascending: bool = False,
+    limit: int = 50,
 ) -> List[Dict[str, Any]]:
     """
-    Deterministically compute campaign-level performance metrics.
-
-    Args:
-        dataset_names: List of dataset names to include (e.g. ['sponsored_display', 'sponsored_brands'])
+    Internal logic for computing campaign-level performance metrics.
     """
     frames: List[pd.DataFrame] = []
     
@@ -212,23 +212,55 @@ def compute_campaign_metrics(
         )
         results.append(metrics.dict())
 
-    return results
+    sorted_results = sorted(
+        results,
+        key=lambda x: float(x.get(sort_by, 0.0) or 0.0),
+        reverse=not ascending
+    )
+    
+    return sorted_results[:limit]
 
 
-@tool("compute_search_term_metrics", return_direct=False)
-def compute_search_term_metrics(
-    dataset_name: str = "sponsored_brands",
+@tool("compute_campaign_metrics", return_direct=False)
+def compute_campaign_metrics(
+    dataset_names: List[str],
+    sort_by: str = "spend",
+    ascending: bool = False,
+    limit: int = 50,
 ) -> List[Dict[str, Any]]:
     """
-    Deterministically compute search-term-level performance metrics.
-    Defaults to 'sponsored_brands' if not specified.
+    Deterministically compute campaign-level performance metrics.
+
+    Args:
+        dataset_names: List of dataset names to include (e.g. ['sponsored_display', 'sponsored_brands'])
+        sort_by: Metric to sort by (e.g. 'spend', 'roas', 'sales'). default='spend'
+        ascending: Sort order. default=False (descending)
+        limit: Max number of records to return. default=50
     """
-    try:
-        df = _load_dataframe(dataset_name)
-    except Exception:
+    return _compute_campaign_metrics(dataset_names, sort_by, ascending, limit)
+
+
+def _compute_search_term_metrics(
+    dataset_names: List[str],
+    sort_by: str = "spend",
+    ascending: bool = False,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Internal logic to compute search term metrics across datasets"""
+    
+    frames = []
+    for dataset_name in dataset_names:
+        try:
+            df = _load_dataframe(dataset_name)
+            df = _normalize_columns(df)
+            frames.append(df)
+        except Exception:
+            continue
+            
+    if not frames:
         return []
 
-    df = _normalize_columns(df)
+    df = pd.concat(frames, ignore_index=True)
 
     search_term_col = _first_existing_column(
         df, ["Search Term", "search_term", "Customer Search Term"]
@@ -282,23 +314,54 @@ def compute_search_term_metrics(
         )
         results.append(metrics.dict())
 
-    return results
+    sorted_results = sorted(
+        results,
+        key=lambda x: float(x.get(sort_by, 0.0) or 0.0),
+        reverse=not ascending
+    )
+
+    return sorted_results[:limit]
 
 
-@tool("compute_product_metrics", return_direct=False)
-def compute_product_metrics(
-    dataset_name: str = "sponsored_display",
+@tool("compute_search_term_metrics", return_direct=False)
+def compute_search_term_metrics(
+    dataset_name: str = "sponsored_brands",
+    sort_by: str = "spend",
+    ascending: bool = False,
+    limit: int = 50,
 ) -> List[Dict[str, Any]]:
     """
-    Deterministically compute product-level performance metrics.
-    Defaults to 'sponsored_display'.
+    Deterministically compute search-term-level performance metrics.
+    Defaults to 'sponsored_brands' if not specified.
+    
+    Args:
+        dataset_name: The dataset to analyze.
+        sort_by: Metric to sort by (e.g. 'spend', 'clicks').
+        limit: Max number of records to return.
     """
-    try:
-        df = _load_dataframe(dataset_name)
-    except Exception:
+    return _compute_search_term_metrics([dataset_name], sort_by, ascending, limit)
+
+
+def _compute_product_metrics(
+    dataset_names: List[str],
+    sort_by: str = "spend",
+    ascending: bool = False,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Internal logic to compute product metrics across datasets"""
+    frames = []
+    for dataset_name in dataset_names:
+        try:
+            df = _load_dataframe(dataset_name)
+            df = _normalize_columns(df)
+            frames.append(df)
+        except Exception:
+            continue
+            
+    if not frames:
         return []
 
-    df = _normalize_columns(df)
+    df = pd.concat(frames, ignore_index=True)
 
     asin_col = _first_existing_column(df, ["ASIN", "asin"])
     sku_col = _first_existing_column(df, ["SKU", "sku"])
@@ -313,13 +376,17 @@ def compute_product_metrics(
     campaign_id_col = _first_existing_column(df, ["Campaign ID", "campaign_id"])
 
     group_keys = []
-    for col in [asin_col, sku_col, product_name_col, campaign_id_col, campaign_name_col]:
-        if col:
-            group_keys.append(col)
+    # Key product identifiers
+    if asin_col: group_keys.append(asin_col)
+    if sku_col: group_keys.append(sku_col)
+    if product_name_col: group_keys.append(product_name_col)
+    # Group by campaign? If we want per-campaign product performance, yes.
+    # Usually product metrics are aggregate. Let's include campaign info if possible to distinguish.
+    if campaign_id_col: group_keys.append(campaign_id_col)
+    if campaign_name_col: group_keys.append(campaign_name_col)
 
     if not group_keys:
-        # Fallback: aggregate across entire dataset as a single pseudo-product.
-        # But allow for "all" 
+        # Fallback: aggregate across entire dataset
         df["__all"] = 1
         grouped = df.groupby("__all", dropna=False)
     else:
@@ -352,66 +419,170 @@ def compute_product_metrics(
         )
         results.append(metrics.dict())
 
-    return results
+    sorted_results = sorted(
+        results,
+        key=lambda x: float(x.get(sort_by, 0.0) or 0.0),
+        reverse=not ascending
+    )
 
-# NOTE: Account summary still expects the calculated metrics to aggregate them.
-# The agent will likely compute C/S/P metrics and then pass them to this tool.
-@tool("compute_account_summary", return_direct=False)
-def compute_account_summary(
-    campaign_metrics: Optional[List[Dict[str, Any]]] = None,
-    search_term_metrics: Optional[List[Dict[str, Any]]] = None,
-    product_metrics: Optional[List[Dict[str, Any]]] = None,
+    return sorted_results[:limit]
+
+
+@tool("compute_product_metrics", return_direct=False)
+def compute_product_metrics(
+    dataset_name: str = "sponsored_display",
+    sort_by: str = "spend",
+    ascending: bool = False,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """
+    Deterministically compute product-level performance metrics.
+    Defaults to 'sponsored_display'.
+    
+    Args:
+        dataset_name: The dataset to analyze.
+        sort_by: Metric to sort by (e.g. 'spend', 'roas').
+        limit: Max number of records to return.
+    """
+    return _compute_product_metrics([dataset_name], sort_by, ascending, limit)
+
+
+def _compute_account_summary(
+    dataset_names: List[str],
 ) -> Dict[str, Any]:
-    """
-    Deterministically compute an account-level summary.
+    """Internal logic for account summary calculation."""
+    frames: List[pd.DataFrame] = []
+    
+    # Load all requested datasets
+    for name in dataset_names:
+        try:
+            df = _load_dataframe(name)
+            df = _normalize_columns(df)
+            frames.append(df)
+        except Exception:
+            continue
+            
+    if not frames:
+         return AccountSummary().dict()
+    
+    full_df = pd.concat(frames, sort=False, ignore_index=True)
 
-    This function aggregates core performance metrics from campaign-level
-    results (or other levels if campaign is missing) and counts entities.
-    """
-    campaign_metrics = campaign_metrics or []
-    search_term_metrics = search_term_metrics or []
-    product_metrics = product_metrics or []
+    try:
+        base = _aggregate_base_metrics(full_df)
+    except ValueError:
+        # If aggregation fails on global level, return empty summary
+        return AccountSummary().dict()
 
-    # Aggregate core performance from campaigns only to avoid double counting.
-    # If no campaign metrics, try products, then search terms.
-    source_metrics = campaign_metrics
-    if not source_metrics and product_metrics:
-        source_metrics = product_metrics
-    if not source_metrics and search_term_metrics:
-        source_metrics = search_term_metrics
+    # Identify unique entities count (approximate)
+    # Campaigns
+    camp_col = _first_existing_column(full_df, ["Campaign ID", "campaign_id", "Campaign Name", "campaign_name"])
+    total_campaigns = full_df[camp_col].nunique() if camp_col else 0
 
-    spend = sum(float(m.get("spend", 0.0)) for m in source_metrics)
-    sales = sum(float(m.get("sales", 0.0)) for m in source_metrics)
-    orders = int(sum(float(m.get("orders", 0)) for m in source_metrics))
-    impressions = int(sum(float(m.get("impressions", 0)) for m in source_metrics))
-    clicks = int(sum(float(m.get("clicks", 0)) for m in source_metrics))
+    # Products (ASINs)
+    asin_col = _first_existing_column(full_df, ["ASIN", "asin", "Advertised ASIN"])
+    total_products = full_df[asin_col].nunique() if asin_col else 0
 
-    ctr = _safe_div(clicks, impressions)
-    cvr = _safe_div(orders, clicks)
-    cpc = _safe_div(spend, clicks)
-    acos = _safe_div(spend, sales)
-    roas = _safe_div(sales, spend)
-
-    total_campaigns = len({m.get('campaign_id') for m in campaign_metrics if m.get('campaign_id')})
-    # If campaign_metrics list is empty, count might be 0, but total_campaigns might also be derived from products/search terms
-    # but strictly speaking we count what we have.
+    # Search Terms
+    term_col = _first_existing_column(full_df, ["Search Term", "search_term", "Customer Search Term"])
+    total_search_terms = full_df[term_col].nunique() if term_col else 0
     
     summary = AccountSummary(
-        spend=spend,
-        sales=sales,
-        orders=orders,
-        impressions=impressions,
-        clicks=clicks,
-        ctr=ctr,
-        cvr=cvr,
-        cpc=cpc,
-        acos=acos,
-        roas=roas,
-        total_campaigns=total_campaigns if total_campaigns > 0 else len(campaign_metrics),
-        total_products=len(product_metrics),
-        total_search_terms=len(search_term_metrics),
-        start_date=None,
-        end_date=None,
+        total_campaigns=total_campaigns,
+        total_products=total_products,
+        total_search_terms=total_search_terms,
+        **base
     )
 
     return summary.dict()
+
+
+@tool("compute_account_summary", return_direct=False)
+def compute_account_summary(
+    dataset_names: List[str],
+) -> Dict[str, Any]:
+    """
+    Deterministically compute an account-level summary from raw data files.
+    
+    Args:
+        dataset_names: List of dataset names to include in the summary.
+    """
+    return _compute_account_summary(dataset_names)
+
+
+@tool("get_holistic_performance_report", return_direct=False)
+def get_holistic_performance_report(dataset_names: List[str]) -> Dict[str, Any]:
+    """
+    Generates a comprehensive performance report (LangChain tool wrapper).
+    
+    Args:
+        dataset_names: A list of all available dataset filenames to include in the computation.
+    """
+    return get_holistic_performance_report_data(dataset_names)
+
+
+def get_holistic_performance_report_data(dataset_names: List[str]) -> Dict[str, Any]:
+    """
+    Pure-Python function that computes the full report and returns
+    JSON-serializable data compatible with MetricsBundle schema.
+    
+    This is the function called directly by the metrics agent (no LLM needed).
+    """
+    
+    # 1. Account Summary
+    account_summary = _compute_account_summary(dataset_names)
+    
+    # 2. Campaigns
+    top_campaigns_spend = _compute_campaign_metrics(
+        dataset_names, sort_by="spend", ascending=False, limit=5
+    )
+    top_campaigns_roas = _compute_campaign_metrics(
+        dataset_names, sort_by="roas", ascending=False, limit=5
+    )
+    bottom_campaigns_roas = _compute_campaign_metrics(
+        dataset_names, sort_by="roas", ascending=True, limit=5
+    )
+    
+    # Search Terms
+    top_search_terms_spend = _compute_search_term_metrics(
+        dataset_names, sort_by="spend", ascending=False, limit=5
+    )
+    top_search_terms_roas = _compute_search_term_metrics(
+        dataset_names, sort_by="roas", ascending=False, limit=5
+    )
+    
+    # Products
+    top_products_spend = _compute_product_metrics(
+        dataset_names, sort_by="spend", ascending=False, limit=5
+    )
+    bottom_products_roas = _compute_product_metrics(
+        dataset_names, sort_by="roas", ascending=True, limit=5
+    )
+    
+    # Ensure all CampaignType enums are serialized as strings
+    def _serialize(obj):
+        """Make all values JSON-serializable."""
+        if isinstance(obj, dict):
+            return {k: _serialize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_serialize(i) for i in obj]
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if hasattr(obj, "value"):  # Enum
+            return obj.value
+        return obj
+
+    return _serialize({
+        "report_metadata": {
+            "generated_at": datetime.utcnow(),
+            "start_date": account_summary.get("start_date"),
+            "end_date": account_summary.get("end_date")
+        },
+        "account_summary": account_summary,
+        "top_campaigns_by_spend": top_campaigns_spend,
+        "top_campaigns_by_roas": top_campaigns_roas,
+        "bottom_campaigns_by_roas": bottom_campaigns_roas,
+        "top_search_terms_by_spend": top_search_terms_spend,
+        "top_search_terms_by_roas": top_search_terms_roas,
+        "top_products_by_spend": top_products_spend,
+        "bottom_products_by_roas": bottom_products_roas
+    })

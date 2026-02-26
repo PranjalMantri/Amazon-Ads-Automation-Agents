@@ -49,7 +49,7 @@ src/
 4. **Environment Configuration:**
    Create a `.env` file in the root directory:
    ```bash
-   GOOGLE_API_KEY=your_gemini_api_key_here
+   ANTHROPIC_API_KEY=your_anthropic_api_key_here
    ```
 
 ## Usage

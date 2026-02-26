@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, date
 from enum import Enum
-from typing import Optional, List
+from typing import Any, Optional, List
 
 from pydantic import BaseModel, Field, validator
 
@@ -81,19 +81,34 @@ class ReportMetadata(BaseModel):
     generated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class CategoryPerformance(BaseModel):
+    """Aggregated performance for a specific category (Top/Bottom by Metric)."""
+    category_name: str
+    items: List[Any]  # Can hold CampaignMetrics, SearchTermMetrics, etc.
+
 class MetricsBundle(BaseModel):
     """
     Top-level metrics bundle passed from the Metrics Agent to the Insights Agent.
-
-    This is the ONLY input the Insights Agent is allowed to see.
+    
+    Contains aggregated account summary and filtered lists of top/bottom performers
+    to minimize token usage while retaining key insights.
     """
 
     report_metadata: ReportMetadata
     account_summary: AccountSummary
-    campaign_metrics: List[CampaignMetrics]
-    search_term_metrics: List[SearchTermMetrics]
-    product_metrics: List[ProductMetrics]
+    
+    # Specific slices of interest
+    top_campaigns_by_spend: List[CampaignMetrics] = Field(default_factory=list)
+    top_campaigns_by_roas: List[CampaignMetrics] = Field(default_factory=list)
+    bottom_campaigns_by_roas: List[CampaignMetrics] = Field(default_factory=list)
+
+    top_search_terms_by_spend: List[SearchTermMetrics] = Field(default_factory=list)
+    top_search_terms_by_roas: List[SearchTermMetrics] = Field(default_factory=list)
+    
+    top_products_by_spend: List[ProductMetrics] = Field(default_factory=list)
+    top_products_by_roas: List[ProductMetrics] = Field(default_factory=list)
+    bottom_products_by_roas: List[ProductMetrics] = Field(default_factory=list)
 
     class Config:
-        extra = "forbid"
+        extra = "allow" # Allow extra fields if agents want to pass more slices
 
