@@ -55,7 +55,6 @@ def supervisor_node(state: SupervisorState) -> SupervisorState:
     return state
 
 
-# ── Ultra-compact routing prompt (minimises token usage) ──────────────
 _ROUTE_PROMPT = """You are a workflow supervisor. Pick the next worker.
 
 Workers:
@@ -70,11 +69,7 @@ Respond with next_node only."""
 
 
 def decide_next_node(state: SupervisorState) -> str:
-    """Route to the next agent via a single, token-efficient LLM call.
-
-    Supports dynamic agent discovery and human-in-the-loop.
-    Falls back to deterministic logic if the LLM call fails.
-    """
+    """Route to the next agent via LLM, with deterministic fallback."""
     metrics_status = "done" if state.get("metrics_bundle") else "pending"
     insights_status = "done" if state.get("insights_report") else "pending"
 

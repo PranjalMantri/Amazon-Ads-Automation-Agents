@@ -1,7 +1,7 @@
-"""Insights Agent — exactly 1 LLM call with structured output.
+"""Insights Agent — single LLM call with structured output.
 
-Uses compact pre-serialized JSON context and structured output binding
-to guarantee a single round-trip with no retries.
+Serializes metrics to compact JSON and uses structured output binding to
+produce an ``InsightsReport`` in one round-trip.
 """
 
 from __future__ import annotations
@@ -41,15 +41,14 @@ Rules:
 
 
 def run_insights_agent(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate insights with exactly 1 LLM call using structured output."""
-    logger.info("[insights_agent] Starting (1 LLM call)...")
+    """Generate an ``InsightsReport`` from the metrics bundle via a single LLM call."""
+    logger.info("[insights_agent] Starting...")
 
     metrics_bundle = state.get("metrics_bundle")
     if metrics_bundle is None:
         logger.error("[insights_agent] No metrics_bundle in state!")
         return {"insights_report": None}
 
-    # Serialize metrics to compact JSON — avoids Python repr issues
     if hasattr(metrics_bundle, "model_dump"):
         metrics_json = json.dumps(metrics_bundle.model_dump(mode="json"), default=str)
     elif isinstance(metrics_bundle, dict):
@@ -57,7 +56,6 @@ def run_insights_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     else:
         metrics_json = str(metrics_bundle)
 
-    # Single LLM call with structured output
     llm = get_insights_llm()
     structured_llm = llm.with_structured_output(InsightsReport)
 
@@ -68,7 +66,7 @@ def run_insights_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         insights_report: InsightsReport = structured_llm.invoke(messages)
-        logger.info("[insights_agent] Insights generated successfully (1 call).")
+        logger.info("[insights_agent] Insights generated successfully.")
         return {"insights_report": insights_report}
     except Exception as exc:
         logger.error("[insights_agent] LLM call failed: %s", exc, exc_info=True)

@@ -12,15 +12,10 @@ from src.agents.supervisor import (
 
 
 def _human_node(state: SupervisorState) -> SupervisorState:
-    """Placeholder for human-in-the-loop interaction.
-
-    When the supervisor routes here, execution pauses for human input.
-    Extend this to integrate with your preferred UI / messaging system.
-    """
+    """Placeholder for human-in-the-loop interaction."""
     import logging
-    logger = logging.getLogger(__name__)
-    logger.info("[human] Human-in-the-loop requested. Returning to supervisor.")
-    # In production, you'd wait for human input and update state here.
+
+    logging.getLogger(__name__).info("[human] Human-in-the-loop requested.")
     return state
 
 
@@ -36,7 +31,6 @@ def build_workflow():
     # Entry point
     graph.set_entry_point("supervisor")
 
-    # Dynamic routing decided by LLM — supports any registered agent + human
     graph.add_conditional_edges(
         "supervisor",
         decide_next_node,
@@ -48,7 +42,6 @@ def build_workflow():
         },
     )
 
-    # All agents return to supervisor for next routing decision
     graph.add_edge("metrics_agent", "supervisor")
     graph.add_edge("insights_agent", "supervisor")
     graph.add_edge("human", "supervisor")

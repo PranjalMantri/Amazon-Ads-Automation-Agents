@@ -20,21 +20,15 @@ def _get_data_dir() -> Path:
     return project_root / "data"
 
 def _load_dataframe(dataset_name: str) -> pd.DataFrame:
-    """
-    Internal helper to load dataframe by logical name.
-    
-    This function handles caching and file paths. It returns a pandas DataFrame, NOT raw data.
-    """
+    """Load a dataset by logical name, returning a cached ``DataFrame``."""
     try:
         normalized = dataset_name.lower().replace(" ", "_").strip()
     except AttributeError:
-        # Handle case where dataset_name might be None or not a string
         raise ValueError(f"Invalid dataset name: {dataset_name}")
 
     if normalized not in DATASET_MAPPING:
-        # Try finding partial match if needed or just error
         available = list(DATASET_MAPPING.keys())
-        raise ValueError(f"Unknown dataset: {dataset_name}. available: {available}")
+        raise ValueError(f"Unknown dataset: {dataset_name}. Available: {available}")
     
     key = normalized
     if key in _DATA_CACHE:
@@ -81,16 +75,14 @@ def get_dataset_schema(dataset_name: str) -> Dict[str, Any]:
 
 @tool("get_dataset_sample")
 def get_dataset_sample(dataset_name: str, n: int = 3) -> List[Dict[str, Any]]:
-    """
-    Get the first N rows of a dataset to understand the data format and values.
-    
+    """Get the first N rows of a dataset.
+
     Args:
         dataset_name: The name of the dataset.
         n: Number of rows to return (default 3).
     """
     try:
         df = _load_dataframe(dataset_name)
-        # Return only first n rows
         return df.head(n).to_dict(orient="records")
     except Exception as e:
         return [{"error": str(e)}]

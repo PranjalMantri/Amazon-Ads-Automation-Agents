@@ -34,4 +34,5 @@ wheels/
 
 # Local Data & Outputs
 metrics_output.json
-# data/  <-- Uncomment if 'data/' contains real/sensitive client data
+llm_logs.jsonl
+# data/  # Uncomment if data/ contains sensitive client data

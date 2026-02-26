@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+import logging
+from typing import Any, Dict, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel
 from langchain_core.language_models import BaseChatModel
@@ -7,12 +8,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.prebuilt import create_react_agent
 
-
 from src.framework.agent_registry import AgentRegistry
 
-import logging
-
-# Configure logger
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
@@ -43,8 +40,8 @@ class Agent:
         try:
             description = self.system_prompt.split('\n')[0] if self.system_prompt else f"Agent {self.name}"
             AgentRegistry.register_agent(name=self.name, description=description)
-        except Exception as e:
-            print(f"Warning: Failed to register agent {self.name}: {e}")
+        except Exception as exc:
+            logger.warning("Failed to register agent %s: %s", self.name, exc)
         
         self.tools = list(tools)
         
@@ -68,86 +65,65 @@ class Agent:
         )
 
     def _get_system_message(self, state: Dict[str, Any]) -> str:
-        """Builds the dynamic system message."""
+        """Build the dynamic system message with injected context and output instructions."""
         current_prompt = self.system_prompt
 
-        # Inject Context
         if self.context_keys:
             current_prompt += "\n\n### Context Data:"
             for key in self.context_keys:
                 val = state.get(key)
                 if val:
-                    # Convert to string/json
-                    if hasattr(val, "json"):
-                        val_str = val.json()
+                    if hasattr(val, "model_dump_json"):
+                        val_str = val.model_dump_json()
                     elif isinstance(val, (dict, list)):
                         val_str = json.dumps(val, default=str)
                     else:
                         val_str = str(val)
                     current_prompt += f"\n- {key}: {val_str}"
-        
-        # Inject Instructions for Response Format
+
         if self.response_format:
-             current_prompt += (
+            current_prompt += (
                 f"\n\n### Output Requirement:\n"
                 f"You MUST end your turn by calling the tool '{self.response_tool_name}'. "
                 f"Pass the final data into '{self.response_tool_name}'."
             )
-            
+
         return current_prompt
 
     def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Runs the agent graph with the given state."""
-        logger.info(f"[{self.name}] Starting run...")
-        
-        # 1. Prepare Inputs
+        """Run the agent graph and return the output keyed by ``output_key``."""
+        logger.info("[%s] Starting run...", self.name)
+
         system_msg = self._get_system_message(state)
-        # Use user_request if available, otherwise just a trigger
         user_request = state.get("user_request", "Proceed with the task.")
 
         messages = [
             SystemMessage(content=system_msg),
-            HumanMessage(content=str(user_request))
+            HumanMessage(content=str(user_request)),
         ]
-
-        # create_react_agent expects a state with "messages"
         inputs = {"messages": messages}
 
         try:
             result = self.graph.invoke(inputs)
-            # Result state usually has "messages"
             result_messages = result.get("messages", [])
             last_message = result_messages[-1] if result_messages else None
 
-            # 2. Process Structured Output
             if self.response_format and last_message:
-                # Check for tool_calls in the last message
                 if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
                     for tool_call in last_message.tool_calls:
                         if tool_call["name"] == self.response_tool_name:
-                            # Parse arguments
                             try:
-                                # Validate against pydantic schema
                                 parsed_output = self.response_format(**tool_call["args"])
                                 return {self.output_key: parsed_output}
-                            except Exception as e:
-                                logger.error(f"[{self.name}] Validation Error: {e}")
-                                return {"error": f"Validation failed: {e}", "raw": tool_call["args"]}
-                
-                logger.warning(f"[{self.name}] Warning: '{self.response_tool_name}' not called.")
-                # Fallback return content if tool wasn't called
+                            except Exception as exc:
+                                logger.error("[%s] Validation error: %s", self.name, exc)
+                                return {"error": f"Validation failed: {exc}", "raw": tool_call["args"]}
+
+                logger.warning("[%s] '%s' tool was not called by the model.", self.name, self.response_tool_name)
                 return {"error": "Tool not called", "content": last_message.content}
 
-            # 3. Default Output (if no structured response required)
-            # We explicitly strictly return a dict that matches what SupervisorState expects if we know it.
-            # But the Agent usage in the plan implies returning the output key update.
-            # If no output key/response format, we might strictly return messages if that was the design.
-            # However, looking at the graph, nodes return updates to state.
-            
-            # If no response format, assume we return messages or some other key?
-            # For this simplified framework, let's assume if no response_format, we return nothing or messages.
             return {"messages": result_messages}
 
-        except Exception as e:
-            logger.error(f"[{self.name}] Error: {e}", exc_info=True)
-            raise e
+        except Exception as exc:
+            logger.error("[%s] Error: %s", self.name, exc, exc_info=True)
+            raise

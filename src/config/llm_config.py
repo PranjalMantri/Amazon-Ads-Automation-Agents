@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import os
-import json
 import datetime
-from typing import Optional, Any
+import json
+import os
+import uuid
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
@@ -11,6 +12,7 @@ from langchain_anthropic import ChatAnthropic
 load_dotenv()
 
 CLAUDE_HAIKU_MODEL = "claude-3-haiku-20240307"
+LLM_LOG_FILE = "llm_logs.jsonl"
 
 def _get_anthropic_api_key() -> str:
     """Retrieve API key from environment."""
@@ -23,15 +25,12 @@ def _get_anthropic_api_key() -> str:
         )
     return api_key
 
-def log_llm_event(event_type: str, data: Any, model_name: str, request_id: str = None):
-    """Log LLM event (input or output) to a file."""
-    log_file = "llm_logs.jsonl"
+def log_llm_event(event_type: str, data: Any, model_name: str, request_id: str | None = None):
+    """Append an LLM invocation event (input or output) to *LLM_LOG_FILE*."""
     timestamp = datetime.datetime.now().isoformat()
-    
+
     try:
-        content = None
         if event_type == "input":
-            # Convert input to a serializable format
             if hasattr(data, "messages"):
                 content = [m.content for m in data.messages]
             elif isinstance(data, list):
@@ -40,52 +39,46 @@ def log_llm_event(event_type: str, data: Any, model_name: str, request_id: str =
                 content = data
             else:
                 content = str(data)
-        else: # output
-            output_data = {}
+        else:
+            output_data: dict[str, Any] = {}
             if hasattr(data, "content"):
                 output_data["content"] = data.content
-            
             if hasattr(data, "tool_calls") and data.tool_calls:
-                # specific handling for tool calls which might need serialization
                 output_data["tool_calls"] = data.tool_calls
-            
             if hasattr(data, "response_metadata"):
-                output_data["usage"] = data.response_metadata.get("token_usage") or data.response_metadata.get("usage")
-
-            if not output_data:
-                 content = str(data)
-            else:
-                 content = output_data
+                output_data["usage"] = (
+                    data.response_metadata.get("token_usage")
+                    or data.response_metadata.get("usage")
+                )
+            content = output_data or str(data)
 
         entry = {
             "timestamp": timestamp,
             "request_id": request_id,
             "model": model_name,
             "type": event_type,
-            "data": content
+            "data": content,
         }
-        
-        with open(log_file, "a", encoding="utf-8") as f:
+
+        with open(LLM_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str) + "\n")
-            
-    except Exception as e:
-        # Fallback logging
-        with open(log_file, "a", encoding="utf-8") as f:
+
+    except Exception as exc:
+        with open(LLM_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps({
                 "timestamp": timestamp,
                 "request_id": request_id,
                 "model": model_name,
                 "type": "error",
-                "error": str(e),
-                "raw_data_str": str(data)
+                "error": str(exc),
+                "raw_data_str": str(data),
             }) + "\n")
 
 
 class LoggingChatAnthropic(ChatAnthropic):
-    """Wrapper to log inputs and outputs before calling the actual model."""
-    
+    """ChatAnthropic subclass that logs every invocation to *LLM_LOG_FILE*."""
+
     def invoke(self, input, config=None, **kwargs):
-        import uuid
         request_id = str(uuid.uuid4())
         log_llm_event("input", input, self.model, request_id)
         result = super().invoke(input, config=config, **kwargs)
@@ -93,7 +86,6 @@ class LoggingChatAnthropic(ChatAnthropic):
         return result
 
     async def ainvoke(self, input, config=None, **kwargs):
-        import uuid
         request_id = str(uuid.uuid4())
         log_llm_event("input", input, self.model, request_id)
         result = await super().ainvoke(input, config=config, **kwargs)
@@ -108,8 +100,7 @@ def _base_llm(
     model: str = CLAUDE_HAIKU_MODEL,
     timeout: Optional[float] = None,
 ) -> ChatAnthropic:
-    """Create a configured ChatAnthropic instance."""
-    # Use the logging wrapper
+    """Create a configured ``LoggingChatAnthropic`` instance."""
     return LoggingChatAnthropic(
         model=model,
         temperature=temperature,

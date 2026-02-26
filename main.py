@@ -50,10 +50,9 @@ def pretty_print_results(final_state: SupervisorState) -> None:
         else:
             metrics_payload = metrics_bundle
             
-        # Store Account Summary to file
         with open("metrics_output.json", "w") as f:
             json.dump(metrics_payload, f, indent=2)
-        
+
         print("Full metrics bundle produced successfully.")
 
     print("\n=== Amazon Ads Insights Report (structured) ===")
@@ -84,7 +83,7 @@ def main() -> None:
         end_date=args.end_date,
     )
 
-    logger.info(f"Invoking workflow with request: {args.request!r}")
+    logger.info("Invoking workflow with request: %r", args.request)
 
     final_state: SupervisorState = app.invoke(initial_state)
     logger.info("Workflow completed. Rendering results.")
@@ -93,4 +92,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

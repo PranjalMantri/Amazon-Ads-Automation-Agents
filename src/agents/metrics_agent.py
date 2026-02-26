@@ -1,8 +1,6 @@
-"""Metrics Agent — pure Python, ZERO LLM calls.
+"""Metrics Agent — deterministic computation with no LLM calls.
 
-The entire metrics computation pipeline is deterministic pandas aggregation.
-There is no reason to involve an LLM here. This eliminates 5-8 LLM calls that
-previously burned ~60K tokens per execution.
+All metrics are computed via pandas aggregation and validated with Pydantic.
 """
 
 from __future__ import annotations
@@ -25,25 +23,16 @@ AgentRegistry.register_agent(
 
 
 def run_metrics_agent(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Compute all metrics locally and return a validated MetricsBundle.
+    """Compute all metrics and return a validated ``MetricsBundle``."""
+    logger.info("[metrics_agent] Starting metrics computation...")
 
-    No LLM is involved — just pandas + pydantic validation.
-    """
-    logger.info("[metrics_agent] Starting local metrics computation (0 LLM calls)...")
-
-    # Datasets are known at import time — no need to ask an LLM
     dataset_names = list(DATASET_MAPPING.keys())
-
-    # Pure Python: compute the full report dict
     raw_report = get_holistic_performance_report_data(dataset_names)
 
-    # Validate locally against the Pydantic schema — catches format issues
-    # *before* they would have caused an LLM retry loop
     try:
         metrics_bundle = MetricsBundle(**raw_report)
     except Exception as exc:
         logger.error("[metrics_agent] Pydantic validation failed: %s", exc)
-        # Attempt lightweight fix: ensure enums are strings, datetimes are ISO, etc.
         metrics_bundle = _attempt_repair(raw_report)
 
     logger.info("[metrics_agent] Metrics computed & validated successfully.")
@@ -51,14 +40,13 @@ def run_metrics_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _attempt_repair(raw: Dict[str, Any]) -> MetricsBundle:
-    """Best-effort local repair of common serialization issues."""
-    import json
+    """Best-effort repair of common serialization issues (enums, datetimes)."""
     from datetime import datetime
 
     def _fix(obj: Any) -> Any:
         if isinstance(obj, datetime):
             return obj.isoformat()
-        if hasattr(obj, "value"):     
+        if hasattr(obj, "value"):
             return obj.value
         if isinstance(obj, dict):
             return {k: _fix(v) for k, v in obj.items()}

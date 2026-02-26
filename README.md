@@ -20,8 +20,7 @@ src/
 ├── framework/     # Base classes for agents and registry
 ├── graph/         # LangGraph workflow construction
 ├── schemas/       # Pydantic models for data validation
-├── tools/         # Data loading and calculation tools
-└── utils/         # Helper functions
+└── tools/         # Data loading and calculation tools
 ```
 
 ## Setup

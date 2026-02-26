@@ -4,7 +4,7 @@ from datetime import datetime, date
 from enum import Enum
 from typing import Any, Optional, List
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 
 
 class CampaignType(str, Enum):

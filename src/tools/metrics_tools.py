@@ -30,10 +30,7 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _first_existing_column(df: pd.DataFrame, candidates: Iterable[str]) -> Optional[str]:
-    """
-    Return the first column from `candidates` that exists in `df`, trying a few
-    normalizations to be robust to common naming differences.
-    """
+    """Return the first column from *candidates* that exists in *df* (case-insensitive)."""
     normalized = {c.lower().replace(" ", "").replace("_", ""): c for c in df.columns}
     for cand in candidates:
         key = cand.lower().replace(" ", "").replace("_", "")
@@ -88,7 +85,6 @@ def _extract_numeric_columns(df: pd.DataFrame) -> Tuple[str, str, str, str, str]
         if col is None
     ]
     if missing:
-        # In robust systems, we might warn instead of crashing, but failure ensures we don't return garbage.
         raise ValueError(
             f"Required numeric columns not found: {', '.join(missing)}."
         )
@@ -153,7 +149,6 @@ def _compute_campaign_metrics(
         try:
             df = _load_dataframe(name)
             df = _normalize_columns(df)
-            # Tag the source type if possible
             if "sponsored_display" in name:
                 df["__campaign_type"] = "SD"
             elif "sponsored_brands" in name:
@@ -162,7 +157,6 @@ def _compute_campaign_metrics(
                 df["__campaign_type"] = "Other"
             frames.append(df)
         except Exception:
-            # Skip invalid datasets or handle error
             continue
 
     if not frames:
@@ -174,8 +168,7 @@ def _compute_campaign_metrics(
         df, ["Campaign Name", "campaign_name", "Campaign"]
     )
     campaign_id_col = _first_existing_column(df, ["Campaign ID", "campaign_id"])
-    
-    # If we can't identify campaigns, we can't group by them.
+
     if not campaign_name_col and not campaign_id_col:
         return []
 
@@ -184,8 +177,6 @@ def _compute_campaign_metrics(
         group_keys.append(campaign_id_col)
     if campaign_name_col:
         group_keys.append(campaign_name_col)
-    # group_keys.append("__campaign_type") # Optional: split by type or aggregate same campaign across types? 
-    # Usually same campaign ID implies same campaign. Let's keep type for clarity if unique.
     if "__campaign_type" in df.columns:
         group_keys.append("__campaign_type")
 
@@ -210,7 +201,7 @@ def _compute_campaign_metrics(
             campaign_type=key_map.get("__campaign_type"),
             **base,
         )
-        results.append(metrics.dict())
+        results.append(metrics.model_dump())
 
     sorted_results = sorted(
         results,
@@ -246,8 +237,7 @@ def _compute_search_term_metrics(
     ascending: bool = False,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    """Internal logic to compute search term metrics across datasets"""
-    
+    """Compute search-term-level metrics across the given datasets."""
     frames = []
     for dataset_name in dataset_names:
         try:
@@ -312,7 +302,7 @@ def _compute_search_term_metrics(
             else None,
             **base,
         )
-        results.append(metrics.dict())
+        results.append(metrics.model_dump())
 
     sorted_results = sorted(
         results,
@@ -348,7 +338,7 @@ def _compute_product_metrics(
     ascending: bool = False,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    """Internal logic to compute product metrics across datasets"""
+    """Compute product-level metrics across the given datasets."""
     frames = []
     for dataset_name in dataset_names:
         try:
@@ -376,17 +366,13 @@ def _compute_product_metrics(
     campaign_id_col = _first_existing_column(df, ["Campaign ID", "campaign_id"])
 
     group_keys = []
-    # Key product identifiers
     if asin_col: group_keys.append(asin_col)
     if sku_col: group_keys.append(sku_col)
     if product_name_col: group_keys.append(product_name_col)
-    # Group by campaign? If we want per-campaign product performance, yes.
-    # Usually product metrics are aggregate. Let's include campaign info if possible to distinguish.
     if campaign_id_col: group_keys.append(campaign_id_col)
     if campaign_name_col: group_keys.append(campaign_name_col)
 
     if not group_keys:
-        # Fallback: aggregate across entire dataset
         df["__all"] = 1
         grouped = df.groupby("__all", dropna=False)
     else:
@@ -417,7 +403,7 @@ def _compute_product_metrics(
             else None,
             **base,
         )
-        results.append(metrics.dict())
+        results.append(metrics.model_dump())
 
     sorted_results = sorted(
         results,
@@ -450,10 +436,9 @@ def compute_product_metrics(
 def _compute_account_summary(
     dataset_names: List[str],
 ) -> Dict[str, Any]:
-    """Internal logic for account summary calculation."""
+    """Compute an account-level summary across all datasets."""
     frames: List[pd.DataFrame] = []
-    
-    # Load all requested datasets
+
     for name in dataset_names:
         try:
             df = _load_dataframe(name)
@@ -463,29 +448,24 @@ def _compute_account_summary(
             continue
             
     if not frames:
-         return AccountSummary().dict()
+        return AccountSummary().model_dump()
     
     full_df = pd.concat(frames, sort=False, ignore_index=True)
 
     try:
         base = _aggregate_base_metrics(full_df)
     except ValueError:
-        # If aggregation fails on global level, return empty summary
-        return AccountSummary().dict()
+        return AccountSummary().model_dump()
 
-    # Identify unique entities count (approximate)
-    # Campaigns
     camp_col = _first_existing_column(full_df, ["Campaign ID", "campaign_id", "Campaign Name", "campaign_name"])
     total_campaigns = full_df[camp_col].nunique() if camp_col else 0
 
-    # Products (ASINs)
     asin_col = _first_existing_column(full_df, ["ASIN", "asin", "Advertised ASIN"])
     total_products = full_df[asin_col].nunique() if asin_col else 0
 
-    # Search Terms
     term_col = _first_existing_column(full_df, ["Search Term", "search_term", "Customer Search Term"])
     total_search_terms = full_df[term_col].nunique() if term_col else 0
-    
+
     summary = AccountSummary(
         total_campaigns=total_campaigns,
         total_products=total_products,
@@ -493,7 +473,7 @@ def _compute_account_summary(
         **base
     )
 
-    return summary.dict()
+    return summary.model_dump()
 
 
 @tool("compute_account_summary", return_direct=False)
@@ -511,27 +491,19 @@ def compute_account_summary(
 
 @tool("get_holistic_performance_report", return_direct=False)
 def get_holistic_performance_report(dataset_names: List[str]) -> Dict[str, Any]:
-    """
-    Generates a comprehensive performance report (LangChain tool wrapper).
-    
+    """Generate a comprehensive performance report.
+
     Args:
-        dataset_names: A list of all available dataset filenames to include in the computation.
+        dataset_names: Dataset names to include in the computation.
     """
     return get_holistic_performance_report_data(dataset_names)
 
 
 def get_holistic_performance_report_data(dataset_names: List[str]) -> Dict[str, Any]:
-    """
-    Pure-Python function that computes the full report and returns
-    JSON-serializable data compatible with MetricsBundle schema.
+    """Compute the full report and return JSON-serializable ``MetricsBundle`` data."""
     
-    This is the function called directly by the metrics agent (no LLM needed).
-    """
-    
-    # 1. Account Summary
     account_summary = _compute_account_summary(dataset_names)
-    
-    # 2. Campaigns
+
     top_campaigns_spend = _compute_campaign_metrics(
         dataset_names, sort_by="spend", ascending=False, limit=5
     )
@@ -541,26 +513,22 @@ def get_holistic_performance_report_data(dataset_names: List[str]) -> Dict[str, 
     bottom_campaigns_roas = _compute_campaign_metrics(
         dataset_names, sort_by="roas", ascending=True, limit=5
     )
-    
-    # Search Terms
+
     top_search_terms_spend = _compute_search_term_metrics(
         dataset_names, sort_by="spend", ascending=False, limit=5
     )
     top_search_terms_roas = _compute_search_term_metrics(
         dataset_names, sort_by="roas", ascending=False, limit=5
     )
-    
-    # Products
+
     top_products_spend = _compute_product_metrics(
         dataset_names, sort_by="spend", ascending=False, limit=5
     )
     bottom_products_roas = _compute_product_metrics(
         dataset_names, sort_by="roas", ascending=True, limit=5
     )
-    
-    # Ensure all CampaignType enums are serialized as strings
-    def _serialize(obj):
-        """Make all values JSON-serializable."""
+
+    def _serialize(obj: Any) -> Any:
         if isinstance(obj, dict):
             return {k: _serialize(v) for k, v in obj.items()}
         if isinstance(obj, list):
